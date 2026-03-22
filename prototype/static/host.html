@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Party Pool Host</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body class="page host-page">
+    <header class="card row between">
+      <div>
+        <h1 data-i18n="title">Party Pool Host</h1>
+        <p class="muted" data-i18n="subtitle">
+          Survival Test party game prototype
+        </p>
+      </div>
+      <div class="row gap">
+        <button id="langZh" class="btn secondary">繁中</button>
+        <button id="langEn" class="btn secondary">EN</button>
+      </div>
+    </header>
+
+    <section class="card">
+      <div class="row gap wrap">
+        <button id="createRoomBtn" class="btn primary" data-i18n="createRoom">
+          Create Room
+        </button>
+        <button id="startRoundBtn" class="btn success" disabled data-i18n="startRound">
+          Start Round
+        </button>
+      </div>
+      <p id="statusText" class="muted"></p>
+    </section>
+
+    <section id="roomInfo" class="card hidden">
+      <h2 data-i18n="roomInfo">Room Info</h2>
+      <p><strong data-i18n="roomCode">Room Code</strong>: <span id="roomCodeText">-</span></p>
+      <p>
+        <strong data-i18n="joinUrl">Join URL</strong>:
+        <a id="joinUrlLink" target="_blank" rel="noreferrer">-</a>
+      </p>
+      <img id="qrImage" class="qr" alt="Join QR Code" />
+    </section>
+
+    <section class="card">
+      <h2 data-i18n="liveState">Live State</h2>
+      <div class="grid-two">
+        <div><strong data-i18n="phase">Phase</strong>: <span id="phaseText">-</span></div>
+        <div><strong data-i18n="round">Round</strong>: <span id="roundText">-</span></div>
+        <div>
+          <strong data-i18n="readyTimer">Ready Timer</strong>: <span id="readyTimerText">-</span>
+        </div>
+        <div>
+          <strong data-i18n="roundTimer">Round Timer</strong>: <span id="roundTimerText">-</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2 data-i18n="players">Players</h2>
+      <table>
+        <thead>
+          <tr>
+            <th data-i18n="name">Name</th>
+            <th data-i18n="connected">Connected</th>
+            <th data-i18n="ready">Ready</th>
+            <th data-i18n="taps">Taps</th>
+            <th data-i18n="score">Score</th>
+          </tr>
+        </thead>
+        <tbody id="playerRows"></tbody>
+      </table>
+    </section>
+
+    <section class="card">
+      <h2 data-i18n="lastRound">Last Round</h2>
+      <pre id="resultBox" class="result-box">-</pre>
+    </section>
+
+    <script>
+      const I18N = {
+        en: {
+          title: "Party Pool Host",
+          subtitle: "Survival Test party game prototype",
+          createRoom: "Create Room",
+          startRound: "Start Round",
+          roomInfo: "Room Info",
+          roomCode: "Room Code",
+          joinUrl: "Join URL",
+          liveState: "Live State",
+          phase: "Phase",
+          round: "Round",
+          readyTimer: "Ready Timer",
+          roundTimer: "Round Timer",
+          players: "Players",
+          name: "Name",
+          connected: "Connected",
+          ready: "Ready",
+          taps: "Taps",
+          score: "Score",
+          lastRound: "Last Round",
+          statusCreated: "Room created.",
+          statusStarted: "Round prepare phase started.",
+          statusNeedRoom: "Create a room first.",
+          yes: "Yes",
+          no: "No"
+        },
+        "zh-TW": {
+          title: "Party Pool 主畫面",
+          subtitle: "生存力測試派對遊戲原型",
+          createRoom: "開房間",
+          startRound: "開始回合",
+          roomInfo: "房間資訊",
+          roomCode: "房間碼",
+          joinUrl: "加入連結",
+          liveState: "即時狀態",
+          phase: "階段",
+          round: "回合",
+          readyTimer: "準備倒數",
+          roundTimer: "回合倒數",
+          players: "玩家",
+          name: "名稱",
+          connected: "連線",
+          ready: "已準備",
+          taps: "點擊數",
+          score: "分數",
+          lastRound: "上一回合結果",
+          statusCreated: "房間已建立。",
+          statusStarted: "已進入回合準備階段。",
+          statusNeedRoom: "請先建立房間。",
+          yes: "是",
+          no: "否"
+        }
+      };
+
+      const PHASE_LABEL = {
+        en: {
+          waiting: "Waiting",
+          readying: "Readying",
+          playing: "Playing",
+          ended: "Ended"
+        },
+        "zh-TW": {
+          waiting: "等待中",
+          readying: "準備中",
+          playing: "進行中",
+          ended: "已結束"
+        }
+      };
+
+      const state = {
+        lang: localStorage.getItem("party_pool_host_lang") || detectBrowserLang(),
+        roomCode: "",
+        hostToken: "",
+        snapshot: null
+      };
+
+      const ui = {
+        createRoomBtn: document.getElementById("createRoomBtn"),
+        startRoundBtn: document.getElementById("startRoundBtn"),
+        roomInfo: document.getElementById("roomInfo"),
+        roomCodeText: document.getElementById("roomCodeText"),
+        joinUrlLink: document.getElementById("joinUrlLink"),
+        qrImage: document.getElementById("qrImage"),
+        statusText: document.getElementById("statusText"),
+        phaseText: document.getElementById("phaseText"),
+        roundText: document.getElementById("roundText"),
+        readyTimerText: document.getElementById("readyTimerText"),
+        roundTimerText: document.getElementById("roundTimerText"),
+        playerRows: document.getElementById("playerRows"),
+        resultBox: document.getElementById("resultBox"),
+        langZh: document.getElementById("langZh"),
+        langEn: document.getElementById("langEn")
+      };
+
+      function detectBrowserLang() {
+        const raw = (navigator.language || "en").toLowerCase();
+        return raw.startsWith("zh") ? "zh-TW" : "en";
+      }
+
+      function t(key) {
+        return (I18N[state.lang] && I18N[state.lang][key]) || I18N.en[key] || key;
+      }
+
+      function phaseLabel(phase) {
+        const table = PHASE_LABEL[state.lang] || PHASE_LABEL.en;
+        return table[phase] || phase || "-";
+      }
+
+      function applyI18n() {
+        document.querySelectorAll("[data-i18n]").forEach((node) => {
+          node.textContent = t(node.dataset.i18n);
+        });
+      }
+
+      function setLang(next) {
+        state.lang = next;
+        localStorage.setItem("party_pool_host_lang", next);
+        applyI18n();
+        renderSnapshot();
+      }
+
+      function secondsLeft(deadline, serverTime) {
+        if (!deadline || !serverTime) return "-";
+        return Math.max(0, Math.ceil(deadline - serverTime));
+      }
+
+      function renderSnapshot() {
+        const snap = state.snapshot;
+        if (!snap) return;
+
+        ui.phaseText.textContent = phaseLabel(snap.status);
+        ui.roundText.textContent = `${snap.round_index}/${snap.total_rounds}`;
+        ui.readyTimerText.textContent = secondsLeft(snap.ready_deadline_at, snap.server_time);
+        ui.roundTimerText.textContent = secondsLeft(snap.round_end_at, snap.server_time);
+
+        const canStart = snap.status === "waiting" || snap.status === "ended";
+        ui.startRoundBtn.disabled = !canStart;
+
+        ui.playerRows.innerHTML = "";
+        snap.players.forEach((player) => {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td>${escapeHtml(player.nickname)}</td>
+            <td>${player.connected ? t("yes") : t("no")}</td>
+            <td>${player.ready_ok ? t("yes") : t("no")}</td>
+            <td>${player.taps ?? 0}</td>
+            <td>${player.score ?? 0}</td>
+          `;
+          ui.playerRows.appendChild(tr);
+        });
+
+        if (snap.last_round_result) {
+          ui.resultBox.textContent = JSON.stringify(snap.last_round_result, null, 2);
+        }
+      }
+
+      function escapeHtml(value) {
+        return String(value)
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;");
+      }
+
+      async function postJson(url, payload) {
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "request_failed");
+        return data;
+      }
+
+      async function createRoom() {
+        try {
+          const data = await postJson("/api/create-room", {});
+          state.roomCode = data.room_code;
+          state.hostToken = data.host_token;
+
+          ui.roomInfo.classList.remove("hidden");
+          ui.roomCodeText.textContent = data.room_code;
+          ui.joinUrlLink.textContent = data.join_url;
+          ui.joinUrlLink.href = data.join_url;
+          ui.qrImage.src = data.qr_url;
+          ui.statusText.textContent = t("statusCreated");
+          await pollStateOnce();
+        } catch (error) {
+          ui.statusText.textContent = String(error.message || error);
+        }
+      }
+
+      async function startRound() {
+        if (!state.roomCode || !state.hostToken) {
+          ui.statusText.textContent = t("statusNeedRoom");
+          return;
+        }
+        try {
+          await postJson("/api/start-round", {
+            room_code: state.roomCode,
+            host_token: state.hostToken
+          });
+          ui.statusText.textContent = t("statusStarted");
+          await pollStateOnce();
+        } catch (error) {
+          ui.statusText.textContent = String(error.message || error);
+        }
+      }
+
+      async function pollStateOnce() {
+        if (!state.roomCode || !state.hostToken) return;
+        const params = new URLSearchParams({
+          room_code: state.roomCode,
+          token: state.hostToken
+        });
+        const res = await fetch(`/api/room-state?${params.toString()}`);
+        if (!res.ok) return;
+        state.snapshot = await res.json();
+        renderSnapshot();
+      }
+
+      ui.createRoomBtn.addEventListener("click", createRoom);
+      ui.startRoundBtn.addEventListener("click", startRound);
+      ui.langZh.addEventListener("click", () => setLang("zh-TW"));
+      ui.langEn.addEventListener("click", () => setLang("en"));
+
+      applyI18n();
+      setInterval(() => {
+        pollStateOnce().catch(() => {});
+      }, 1000);
+    </script>
+  </body>
+</html>

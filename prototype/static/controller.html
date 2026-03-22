@@ -1,0 +1,389 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Party Pool Controller</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body class="page controller-page">
+    <header class="card row between">
+      <div>
+        <h1 data-i18n="title">Party Pool Controller</h1>
+        <p class="muted" data-i18n="subtitle">Join room, press OK, survive.</p>
+      </div>
+      <div class="row gap">
+        <button id="langZh" class="btn secondary">繁中</button>
+        <button id="langEn" class="btn secondary">EN</button>
+      </div>
+    </header>
+
+    <section id="joinPanel" class="card">
+      <h2 data-i18n="joinGame">Join Game</h2>
+      <label class="block">
+        <span data-i18n="roomCode">Room Code</span>
+        <input id="roomCodeInput" maxlength="6" />
+      </label>
+      <label class="block">
+        <span data-i18n="nickname">Nickname</span>
+        <input id="nicknameInput" maxlength="20" />
+      </label>
+
+      <div class="row gap wrap">
+        <button id="permissionBtn" class="btn primary" data-i18n="grantPermission">
+          Grant Permission
+        </button>
+        <button id="joinBtn" class="btn success" data-i18n="joinRoom" disabled>
+          Join Room
+        </button>
+      </div>
+      <p id="permissionStatus" class="muted"></p>
+      <p id="joinStatus" class="muted"></p>
+    </section>
+
+    <section id="gamePanel" class="card hidden">
+      <h2 data-i18n="gameState">Game State</h2>
+      <p><strong data-i18n="phase">Phase</strong>: <span id="phaseText">-</span></p>
+      <p><strong data-i18n="round">Round</strong>: <span id="roundText">-</span></p>
+      <p><strong data-i18n="timer">Timer</strong>: <span id="timerText">-</span></p>
+      <p id="instructionText" class="instruction"></p>
+
+      <div class="row gap wrap">
+        <button id="readyBtn" class="btn success hidden" data-i18n="okReady">OK Ready</button>
+        <button id="tapBtn" class="btn tap hidden" data-i18n="tapNow">TAP!</button>
+      </div>
+
+      <p id="myStatsText"></p>
+      <h3 data-i18n="leaderboard">Leaderboard</h3>
+      <ul id="scoreboardList" class="score-list"></ul>
+      <h3 data-i18n="lastRound">Last Round</h3>
+      <pre id="roundResultBox" class="result-box">-</pre>
+    </section>
+
+    <script>
+      const I18N = {
+        en: {
+          title: "Party Pool Controller",
+          subtitle: "Join room, press OK, survive.",
+          joinGame: "Join Game",
+          roomCode: "Room Code",
+          nickname: "Nickname",
+          grantPermission: "Grant Permission",
+          joinRoom: "Join Room",
+          gameState: "Game State",
+          phase: "Phase",
+          round: "Round",
+          timer: "Timer",
+          okReady: "OK Ready",
+          tapNow: "TAP!",
+          leaderboard: "Leaderboard",
+          lastRound: "Last Round",
+          permissionWaiting: "Permission required before entering room.",
+          permissionGranted: "Permission granted.",
+          permissionDenied: "Permission denied. You cannot enter room.",
+          joinSuccess: "Joined room successfully.",
+          waitingHost: "Waiting host to start round.",
+          readyPrompt: "Read instructions, then press OK.",
+          playingPrompt: "Tap as fast as possible until timer ends.",
+          endedPrompt: "Match finished. Wait host to restart.",
+          scoreText: "You: {name} | Taps: {taps} | Score: {score}",
+          yes: "Yes",
+          no: "No"
+        },
+        "zh-TW": {
+          title: "Party Pool 控制器",
+          subtitle: "加入房間、按 OK、通過生存測試。",
+          joinGame: "加入遊戲",
+          roomCode: "房間碼",
+          nickname: "暱稱",
+          grantPermission: "同意權限",
+          joinRoom: "加入房間",
+          gameState: "遊戲狀態",
+          phase: "階段",
+          round: "回合",
+          timer: "倒數",
+          okReady: "我準備好了",
+          tapNow: "快速點擊！",
+          leaderboard: "排行榜",
+          lastRound: "上一回合",
+          permissionWaiting: "進房前必須先同意權限。",
+          permissionGranted: "權限同意成功。",
+          permissionDenied: "你拒絕了權限，無法進入房間。",
+          joinSuccess: "加入房間成功。",
+          waitingHost: "等待房主開始回合。",
+          readyPrompt: "先看玩法，按 OK 準備。",
+          playingPrompt: "在時間內盡可能快速點擊。",
+          endedPrompt: "本局結束，等待房主重開。",
+          scoreText: "你：{name}｜點擊：{taps}｜分數：{score}",
+          yes: "是",
+          no: "否"
+        }
+      };
+
+      const PHASE_LABEL = {
+        en: { waiting: "Waiting", readying: "Readying", playing: "Playing", ended: "Ended" },
+        "zh-TW": { waiting: "等待中", readying: "準備中", playing: "進行中", ended: "已結束" }
+      };
+
+      const query = new URLSearchParams(window.location.search);
+      const state = {
+        lang: localStorage.getItem("party_pool_controller_lang") || detectBrowserLang(),
+        roomCode: (query.get("room") || "").toUpperCase(),
+        playerId: "",
+        playerToken: "",
+        permissionGranted: false,
+        snapshot: null
+      };
+
+      const ui = {
+        joinPanel: document.getElementById("joinPanel"),
+        gamePanel: document.getElementById("gamePanel"),
+        roomCodeInput: document.getElementById("roomCodeInput"),
+        nicknameInput: document.getElementById("nicknameInput"),
+        permissionBtn: document.getElementById("permissionBtn"),
+        joinBtn: document.getElementById("joinBtn"),
+        permissionStatus: document.getElementById("permissionStatus"),
+        joinStatus: document.getElementById("joinStatus"),
+        phaseText: document.getElementById("phaseText"),
+        roundText: document.getElementById("roundText"),
+        timerText: document.getElementById("timerText"),
+        instructionText: document.getElementById("instructionText"),
+        readyBtn: document.getElementById("readyBtn"),
+        tapBtn: document.getElementById("tapBtn"),
+        myStatsText: document.getElementById("myStatsText"),
+        scoreboardList: document.getElementById("scoreboardList"),
+        roundResultBox: document.getElementById("roundResultBox"),
+        langZh: document.getElementById("langZh"),
+        langEn: document.getElementById("langEn")
+      };
+
+      ui.roomCodeInput.value = state.roomCode;
+
+      function detectBrowserLang() {
+        const raw = (navigator.language || "en").toLowerCase();
+        return raw.startsWith("zh") ? "zh-TW" : "en";
+      }
+
+      function t(key) {
+        return (I18N[state.lang] && I18N[state.lang][key]) || I18N.en[key] || key;
+      }
+
+      function applyI18n() {
+        document.querySelectorAll("[data-i18n]").forEach((node) => {
+          node.textContent = t(node.dataset.i18n);
+        });
+      }
+
+      function setLang(next) {
+        state.lang = next;
+        localStorage.setItem("party_pool_controller_lang", next);
+        applyI18n();
+        renderSnapshot();
+      }
+
+      function phaseLabel(value) {
+        const table = PHASE_LABEL[state.lang] || PHASE_LABEL.en;
+        return table[value] || value || "-";
+      }
+
+      function secondsLeft(deadline, serverTime) {
+        if (!deadline || !serverTime) return "-";
+        return Math.max(0, Math.ceil(deadline - serverTime));
+      }
+
+      function formatScoreLine(player) {
+        return t("scoreText")
+          .replace("{name}", player.nickname)
+          .replace("{taps}", String(player.taps || 0))
+          .replace("{score}", String(player.score || 0));
+      }
+
+      function getStorageKey(roomCode) {
+        return `party_pool_rejoin_${roomCode}`;
+      }
+
+      async function postJson(url, payload) {
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "request_failed");
+        return data;
+      }
+
+      async function requestPermission() {
+        try {
+          if (
+            typeof DeviceMotionEvent !== "undefined" &&
+            typeof DeviceMotionEvent.requestPermission === "function"
+          ) {
+            const result = await DeviceMotionEvent.requestPermission();
+            state.permissionGranted = result === "granted";
+          } else {
+            state.permissionGranted = true;
+          }
+          ui.joinBtn.disabled = !state.permissionGranted;
+          ui.permissionStatus.textContent = state.permissionGranted
+            ? t("permissionGranted")
+            : t("permissionDenied");
+          if (state.permissionGranted) {
+            await tryRejoin();
+          }
+        } catch (err) {
+          state.permissionGranted = false;
+          ui.joinBtn.disabled = true;
+          ui.permissionStatus.textContent = t("permissionDenied");
+        }
+      }
+
+      async function tryRejoin() {
+        const roomCode = ui.roomCodeInput.value.trim().toUpperCase();
+        if (!roomCode) return;
+        const token = localStorage.getItem(getStorageKey(roomCode));
+        if (!token) return;
+        try {
+          const data = await postJson("/api/rejoin-room", {
+            room_code: roomCode,
+            rejoin_token: token,
+            permission_granted: state.permissionGranted,
+            lang: state.lang
+          });
+          state.roomCode = data.room_code;
+          state.playerId = data.player_id;
+          state.playerToken = data.player_token;
+          ui.joinPanel.classList.add("hidden");
+          ui.gamePanel.classList.remove("hidden");
+          ui.joinStatus.textContent = t("joinSuccess");
+          await pollStateOnce();
+        } catch (_error) {
+          // Ignore silently and allow manual join.
+        }
+      }
+
+      async function joinRoom() {
+        const roomCode = ui.roomCodeInput.value.trim().toUpperCase();
+        const nickname = ui.nicknameInput.value.trim();
+        if (!state.permissionGranted) {
+          ui.permissionStatus.textContent = t("permissionWaiting");
+          return;
+        }
+        try {
+          const data = await postJson("/api/join-room", {
+            room_code: roomCode,
+            nickname,
+            permission_granted: state.permissionGranted,
+            lang: state.lang
+          });
+          state.roomCode = data.room_code;
+          state.playerId = data.player_id;
+          state.playerToken = data.player_token;
+          localStorage.setItem(getStorageKey(state.roomCode), data.rejoin_token);
+
+          ui.joinPanel.classList.add("hidden");
+          ui.gamePanel.classList.remove("hidden");
+          ui.joinStatus.textContent = t("joinSuccess");
+          await pollStateOnce();
+        } catch (error) {
+          ui.joinStatus.textContent = String(error.message || error);
+        }
+      }
+
+      async function sendReadyOk() {
+        try {
+          await postJson("/api/ready-ok", {
+            room_code: state.roomCode,
+            player_token: state.playerToken
+          });
+          await pollStateOnce();
+        } catch (error) {
+          ui.joinStatus.textContent = String(error.message || error);
+        }
+      }
+
+      async function sendTap() {
+        try {
+          await postJson("/api/tap", {
+            room_code: state.roomCode,
+            player_token: state.playerToken
+          });
+        } catch (_error) {
+          // No-op.
+        }
+      }
+
+      function renderSnapshot() {
+        const snap = state.snapshot;
+        if (!snap) return;
+
+        ui.phaseText.textContent = phaseLabel(snap.status);
+        ui.roundText.textContent = `${snap.round_index}/${snap.total_rounds}`;
+
+        const readySeconds = secondsLeft(snap.ready_deadline_at, snap.server_time);
+        const roundSeconds = secondsLeft(snap.round_end_at, snap.server_time);
+        ui.timerText.textContent = snap.status === "readying" ? readySeconds : roundSeconds;
+
+        ui.readyBtn.classList.add("hidden");
+        ui.tapBtn.classList.add("hidden");
+
+        if (snap.status === "waiting") {
+          ui.instructionText.textContent = t("waitingHost");
+        } else if (snap.status === "readying") {
+          ui.instructionText.textContent = t("readyPrompt");
+          const me = snap.players.find((p) => p.player_id === state.playerId);
+          if (me && !me.ready_ok) {
+            ui.readyBtn.classList.remove("hidden");
+          }
+        } else if (snap.status === "playing") {
+          ui.instructionText.textContent = t("playingPrompt");
+          ui.tapBtn.classList.remove("hidden");
+        } else if (snap.status === "ended") {
+          ui.instructionText.textContent = t("endedPrompt");
+        }
+
+        const me = snap.players.find((p) => p.player_id === state.playerId);
+        if (me) {
+          ui.myStatsText.textContent = formatScoreLine(me);
+        }
+
+        const sorted = [...snap.players].sort((a, b) => (b.score || 0) - (a.score || 0));
+        ui.scoreboardList.innerHTML = "";
+        sorted.forEach((player) => {
+          const li = document.createElement("li");
+          li.textContent = `${player.nickname} - ${player.score || 0}`;
+          ui.scoreboardList.appendChild(li);
+        });
+
+        ui.roundResultBox.textContent = snap.last_round_result
+          ? JSON.stringify(snap.last_round_result, null, 2)
+          : "-";
+      }
+
+      async function pollStateOnce() {
+        if (!state.roomCode || !state.playerToken) return;
+        const params = new URLSearchParams({
+          room_code: state.roomCode,
+          token: state.playerToken
+        });
+        const res = await fetch(`/api/room-state?${params.toString()}`);
+        if (!res.ok) return;
+        state.snapshot = await res.json();
+        renderSnapshot();
+      }
+
+      ui.permissionBtn.addEventListener("click", requestPermission);
+      ui.joinBtn.addEventListener("click", joinRoom);
+      ui.readyBtn.addEventListener("click", sendReadyOk);
+      ui.tapBtn.addEventListener("click", sendTap);
+      ui.langZh.addEventListener("click", () => setLang("zh-TW"));
+      ui.langEn.addEventListener("click", () => setLang("en"));
+
+      applyI18n();
+      ui.permissionStatus.textContent = t("permissionWaiting");
+      setInterval(() => {
+        pollStateOnce().catch(() => {});
+      }, 350);
+    </script>
+  </body>
+</html>

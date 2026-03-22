@@ -1,0 +1,164 @@
+:root {
+  --bg: #f8fbff;
+  --card: #ffffff;
+  --text: #17212b;
+  --muted: #4e6173;
+  --line: #d7e3f1;
+  --primary: #1d6fdc;
+  --success: #0a9d58;
+  --tap: #ff7a00;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 16px;
+  background: radial-gradient(circle at top left, #e9f3ff, var(--bg) 45%);
+  color: var(--text);
+  font-family: "Segoe UI", Tahoma, sans-serif;
+}
+
+.page {
+  max-width: 960px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+}
+
+.between {
+  justify-content: space-between;
+}
+
+.gap {
+  gap: 8px;
+}
+
+.wrap {
+  flex-wrap: wrap;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.btn {
+  border: 0;
+  border-radius: 10px;
+  padding: 10px 14px;
+  color: #fff;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn.primary {
+  background: var(--primary);
+}
+
+.btn.success {
+  background: var(--success);
+}
+
+.btn.secondary {
+  background: #5b6f84;
+}
+
+.btn.tap {
+  background: var(--tap);
+  font-size: 24px;
+  width: 100%;
+  min-height: 120px;
+}
+
+.hidden {
+  display: none !important;
+}
+
+.block {
+  display: block;
+  margin: 10px 0;
+}
+
+input {
+  width: 100%;
+  margin-top: 6px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 16px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  border: 1px solid var(--line);
+  padding: 8px;
+  text-align: left;
+}
+
+.grid-two {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.qr {
+  width: 180px;
+  height: 180px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.result-box {
+  background: #f4f9ff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  min-height: 52px;
+  overflow: auto;
+}
+
+.instruction {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 8px 0;
+}
+
+.score-list {
+  margin: 0;
+  padding-left: 18px;
+}
+
+@media (max-width: 640px) {
+  body {
+    padding: 10px;
+  }
+
+  .grid-two {
+    grid-template-columns: 1fr;
+  }
+}

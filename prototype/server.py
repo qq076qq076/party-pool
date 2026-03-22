@@ -31,6 +31,8 @@ ROUND_DURATION_SEC = 20
 TOTAL_ROUNDS = 3
 DISCONNECT_AFTER_SEC = 12
 TICK_INTERVAL_SEC = 0.25
+ROUND_COUNTDOWN_SEC = 3
+LONG_POLL_TIMEOUT_SEC = 25.0
 
 
 def _now() -> float:
@@ -78,6 +80,7 @@ class Room:
     round_end_at: float | None = None
     tap_counts: dict[str, int] = field(default_factory=dict)
     last_round_result: dict[str, Any] | None = None
+    version: int = 1
 
 
 class PartyPoolState:
@@ -85,6 +88,7 @@ class PartyPoolState:
         self._lock = threading.RLock()
         self._rooms: dict[str, Room] = {}
         self._token_to_room: dict[str, tuple[str, str | None]] = {}
+        self._cv = threading.Condition(self._lock)
 
     def create_room(self) -> tuple[Room, str]:
         with self._lock:
@@ -93,7 +97,15 @@ class PartyPoolState:
             room = Room(room_code=code, host_token=host_token)
             self._rooms[code] = room
             self._token_to_room[host_token] = (code, None)
+            self._bump_room_locked(code)
             return room, host_token
+
+    def _bump_room_locked(self, room_code: str) -> None:
+        room = self._rooms.get(room_code)
+        if room is None:
+            return
+        room.version += 1
+        self._cv.notify_all()
 
     def get_room(self, room_code: str) -> Room | None:
         with self._lock:
@@ -129,6 +141,7 @@ class PartyPoolState:
                 player.last_seen_at = _now()
                 if lang:
                     player.lang = lang
+                self._bump_room_locked(room_code)
                 return player, room
 
             player_id = secrets.token_hex(6)
@@ -141,6 +154,7 @@ class PartyPoolState:
             )
             room.players[player_id] = player
             self._token_to_room[token] = (room_code, player_id)
+            self._bump_room_locked(room_code)
             return player, room
 
     def _resolve_room_and_actor(self, token: str) -> tuple[Room, Player | None] | None:
@@ -163,11 +177,14 @@ class PartyPoolState:
         resolved = self._resolve_room_and_actor(token)
         if not resolved:
             return
-        _, player = resolved
+        room, player = resolved
         if player:
             with self._lock:
+                was_connected = player.connected
                 player.last_seen_at = _now()
                 player.connected = True
+                if not was_connected:
+                    self._bump_room_locked(room.room_code)
 
     def start_round_ready_phase(self, *, room_code: str, host_token: str) -> Room:
         with self._lock:
@@ -192,6 +209,7 @@ class PartyPoolState:
             room.tap_counts = {pid: 0 for pid in room.players}
             for player in room.players.values():
                 player.ready_ok = False
+            self._bump_room_locked(room_code)
             return room
 
     def mark_ready_ok(self, *, room_code: str, token: str) -> Room:
@@ -211,6 +229,7 @@ class PartyPoolState:
             player.ready_ok = True
             player.last_seen_at = _now()
             player.connected = True
+            self._bump_room_locked(room_code)
             return room
 
     def register_tap(self, *, room_code: str, token: str) -> Room:
@@ -232,6 +251,7 @@ class PartyPoolState:
             player = room.players[player_id]
             player.last_seen_at = _now()
             player.connected = True
+            self._bump_room_locked(room_code)
             return room
 
     def snapshot(self, *, room_code: str, token: str) -> dict[str, Any]:
@@ -248,12 +268,21 @@ class PartyPoolState:
                 room.players[actor_id].connected = True
 
             return {
+                "version": room.version,
                 "room_code": room.room_code,
                 "status": room.status,
                 "round_index": room.round_index,
                 "total_rounds": TOTAL_ROUNDS,
                 "ready_deadline_at": room.ready_deadline_at,
                 "round_end_at": room.round_end_at,
+                "control_profile": {
+                    "mode": "tap",
+                    "instruction_key": "round1.tap_fast",
+                    "round_duration_sec": ROUND_DURATION_SEC,
+                    "ready_timeout_sec": READY_TIMEOUT_SEC,
+                    "countdown_sec": ROUND_COUNTDOWN_SEC,
+                    "allow_input_before_start": False,
+                },
                 "server_time": _now(),
                 "you_are_host": actor_id is None,
                 "your_player_id": actor_id,
@@ -272,13 +301,41 @@ class PartyPoolState:
                 "last_round_result": room.last_round_result,
             }
 
+    def wait_for_update(
+        self,
+        *,
+        room_code: str,
+        token: str,
+        after_version: int,
+        timeout_sec: float = LONG_POLL_TIMEOUT_SEC,
+    ) -> dict[str, Any]:
+        deadline = _now() + timeout_sec
+        with self._lock:
+            while True:
+                room = self._rooms.get(room_code)
+                if room is None:
+                    raise ValueError("room_not_found")
+                linked = self._token_to_room.get(token)
+                if not linked or linked[0] != room_code:
+                    raise ValueError("unauthorized")
+                if room.version > after_version:
+                    break
+                remaining = deadline - _now()
+                if remaining <= 0:
+                    break
+                self._cv.wait(timeout=remaining)
+        return self.snapshot(room_code=room_code, token=token)
+
     def tick(self) -> None:
         with self._lock:
             now = _now()
             for room in self._rooms.values():
+                room_changed = False
                 for player in room.players.values():
-                    if now - player.last_seen_at > DISCONNECT_AFTER_SEC:
+                    should_disconnect = now - player.last_seen_at > DISCONNECT_AFTER_SEC
+                    if should_disconnect and player.connected:
                         player.connected = False
+                        room_changed = True
 
                 if room.status == "readying":
                     all_ready = bool(room.players) and all(
@@ -287,10 +344,14 @@ class PartyPoolState:
                     timeout = room.ready_deadline_at is not None and now >= room.ready_deadline_at
                     if all_ready or timeout:
                         self._start_playing(room, now=now)
+                        room_changed = True
                 elif room.status == "playing":
                     timeout = room.round_end_at is not None and now >= room.round_end_at
                     if timeout:
                         self._finish_round(room)
+                        room_changed = True
+                if room_changed:
+                    self._bump_room_locked(room.room_code)
 
     def _start_playing(self, room: Room, *, now: float) -> None:
         room.status = "playing"
@@ -354,6 +415,19 @@ class PartyPoolHandler(SimpleHTTPRequestHandler):
             room_code = (query.get("room_code") or [""])[0].strip().upper()
             token = (query.get("token") or [""])[0].strip()
             return self._handle_room_state(room_code=room_code, token=token)
+        if parsed.path == "/api/wait-state":
+            query = parse_qs(parsed.query)
+            room_code = (query.get("room_code") or [""])[0].strip().upper()
+            token = (query.get("token") or [""])[0].strip()
+            try:
+                after_version = int((query.get("after_version") or ["0"])[0])
+            except ValueError:
+                after_version = 0
+            return self._handle_wait_state(
+                room_code=room_code,
+                token=token,
+                after_version=after_version,
+            )
         return super().do_GET()
 
     def do_POST(self) -> None:  # noqa: N802
@@ -399,6 +473,18 @@ class PartyPoolHandler(SimpleHTTPRequestHandler):
     def _handle_room_state(self, *, room_code: str, token: str) -> None:
         try:
             snapshot = STATE.snapshot(room_code=room_code, token=token)
+        except ValueError as exc:
+            self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            return
+        self._send_json(snapshot)
+
+    def _handle_wait_state(self, *, room_code: str, token: str, after_version: int) -> None:
+        try:
+            snapshot = STATE.wait_for_update(
+                room_code=room_code,
+                token=token,
+                after_version=after_version,
+            )
         except ValueError as exc:
             self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
             return

@@ -47,6 +47,7 @@
       <div class="grid-two">
         <div><strong data-i18n="phase">Phase</strong>: <span id="phaseText">-</span></div>
         <div><strong data-i18n="round">Round</strong>: <span id="roundText">-</span></div>
+        <div><strong data-i18n="mode">Mode</strong>: <span id="modeText">-</span></div>
         <div>
           <strong data-i18n="readyTimer">Ready Timer</strong>: <span id="readyTimerText">-</span>
         </div>
@@ -90,6 +91,7 @@
           liveState: "Live State",
           phase: "Phase",
           round: "Round",
+          mode: "Mode",
           readyTimer: "Ready Timer",
           roundTimer: "Round Timer",
           players: "Players",
@@ -116,6 +118,7 @@
           liveState: "即時狀態",
           phase: "階段",
           round: "回合",
+          mode: "模式",
           readyTimer: "準備倒數",
           roundTimer: "回合倒數",
           players: "玩家",
@@ -152,7 +155,10 @@
         lang: localStorage.getItem("party_pool_host_lang") || detectBrowserLang(),
         roomCode: "",
         hostToken: "",
-        snapshot: null
+        snapshot: null,
+        lastVersion: 0,
+        snapshotReceivedAtMs: 0,
+        waitLoopStarted: false
       };
 
       const ui = {
@@ -165,6 +171,7 @@
         statusText: document.getElementById("statusText"),
         phaseText: document.getElementById("phaseText"),
         roundText: document.getElementById("roundText"),
+        modeText: document.getElementById("modeText"),
         readyTimerText: document.getElementById("readyTimerText"),
         roundTimerText: document.getElementById("roundTimerText"),
         playerRows: document.getElementById("playerRows"),
@@ -202,7 +209,9 @@
 
       function secondsLeft(deadline, serverTime) {
         if (!deadline || !serverTime) return "-";
-        return Math.max(0, Math.ceil(deadline - serverTime));
+        const elapsed = (Date.now() - state.snapshotReceivedAtMs) / 1000;
+        const adjustedServerTime = serverTime + Math.max(0, elapsed);
+        return Math.max(0, Math.ceil(deadline - adjustedServerTime));
       }
 
       function renderSnapshot() {
@@ -211,6 +220,7 @@
 
         ui.phaseText.textContent = phaseLabel(snap.status);
         ui.roundText.textContent = `${snap.round_index}/${snap.total_rounds}`;
+        ui.modeText.textContent = snap.control_profile?.mode || "-";
         ui.readyTimerText.textContent = secondsLeft(snap.ready_deadline_at, snap.server_time);
         ui.roundTimerText.textContent = secondsLeft(snap.round_end_at, snap.server_time);
 
@@ -232,6 +242,8 @@
 
         if (snap.last_round_result) {
           ui.resultBox.textContent = JSON.stringify(snap.last_round_result, null, 2);
+        } else {
+          ui.resultBox.textContent = "-";
         }
       }
 
@@ -266,6 +278,7 @@
           ui.qrImage.src = data.qr_url;
           ui.statusText.textContent = t("statusCreated");
           await pollStateOnce();
+          waitStateLoop();
         } catch (error) {
           ui.statusText.textContent = String(error.message || error);
         }
@@ -296,8 +309,43 @@
         });
         const res = await fetch(`/api/room-state?${params.toString()}`);
         if (!res.ok) return;
-        state.snapshot = await res.json();
+        const snap = await res.json();
+        updateSnapshot(snap);
+      }
+
+      function updateSnapshot(snap) {
+        state.snapshot = snap;
+        state.lastVersion = snap.version || state.lastVersion;
+        state.snapshotReceivedAtMs = Date.now();
         renderSnapshot();
+      }
+
+      function delay(ms) {
+        return new Promise((resolve) => setTimeout(resolve, ms));
+      }
+
+      async function waitStateLoop() {
+        if (state.waitLoopStarted) return;
+        state.waitLoopStarted = true;
+        while (state.roomCode && state.hostToken) {
+          try {
+            const params = new URLSearchParams({
+              room_code: state.roomCode,
+              token: state.hostToken,
+              after_version: String(state.lastVersion || 0)
+            });
+            const res = await fetch(`/api/wait-state?${params.toString()}`);
+            if (!res.ok) {
+              await delay(600);
+              continue;
+            }
+            const snap = await res.json();
+            updateSnapshot(snap);
+          } catch (_error) {
+            await delay(800);
+          }
+        }
+        state.waitLoopStarted = false;
       }
 
       ui.createRoomBtn.addEventListener("click", createRoom);
@@ -307,8 +355,8 @@
 
       applyI18n();
       setInterval(() => {
-        pollStateOnce().catch(() => {});
-      }, 1000);
+        renderSnapshot();
+      }, 350);
     </script>
   </body>
 </html>

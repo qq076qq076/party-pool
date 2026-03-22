@@ -13,6 +13,8 @@ This folder contains the first runnable MVP prototype implementation based on `è
 - Scoring: first place +1, ties for first all +1
 - Browser-language default (`zh-*` -> `zh-TW`, else `en`) and manual switch
 - Basic `rejoin_token` flow for reconnect
+- Event-driven state sync via long-poll endpoint (`/api/wait-state`)
+- `control_profile` included in room snapshots (mode/timers/countdown)
 
 ## Run
 From repository root:
@@ -24,6 +26,18 @@ wsl python3 /home/walker/project/party-pool/prototype/server.py
 Then open:
 - Host screen: `http://localhost:8000/host.html`
 - Controller screen: `http://localhost:8000/controller.html?room=ABCD`
+
+Quick start helpers from repo root:
+
+```bash
+./run-prototype.sh
+```
+
+or in PowerShell:
+
+```powershell
+.\run-prototype.ps1
+```
 
 ## Notes
 - This is a web prototype to validate room/game flow quickly.

@@ -132,7 +132,10 @@
         playerId: "",
         playerToken: "",
         permissionGranted: false,
-        snapshot: null
+        snapshot: null,
+        lastVersion: 0,
+        snapshotReceivedAtMs: 0,
+        waitLoopStarted: false
       };
 
       const ui = {
@@ -188,7 +191,9 @@
 
       function secondsLeft(deadline, serverTime) {
         if (!deadline || !serverTime) return "-";
-        return Math.max(0, Math.ceil(deadline - serverTime));
+        const elapsed = (Date.now() - state.snapshotReceivedAtMs) / 1000;
+        const adjustedServerTime = serverTime + Math.max(0, elapsed);
+        return Math.max(0, Math.ceil(deadline - adjustedServerTime));
       }
 
       function formatScoreLine(player) {
@@ -257,6 +262,7 @@
           ui.gamePanel.classList.remove("hidden");
           ui.joinStatus.textContent = t("joinSuccess");
           await pollStateOnce();
+          waitStateLoop();
         } catch (_error) {
           // Ignore silently and allow manual join.
         }
@@ -285,6 +291,7 @@
           ui.gamePanel.classList.remove("hidden");
           ui.joinStatus.textContent = t("joinSuccess");
           await pollStateOnce();
+          waitStateLoop();
         } catch (error) {
           ui.joinStatus.textContent = String(error.message || error);
         }
@@ -326,17 +333,18 @@
 
         ui.readyBtn.classList.add("hidden");
         ui.tapBtn.classList.add("hidden");
+        const mode = snap.control_profile?.mode || "tap";
 
         if (snap.status === "waiting") {
           ui.instructionText.textContent = t("waitingHost");
         } else if (snap.status === "readying") {
-          ui.instructionText.textContent = t("readyPrompt");
+          ui.instructionText.textContent = `${t("readyPrompt")} (${mode})`;
           const me = snap.players.find((p) => p.player_id === state.playerId);
           if (me && !me.ready_ok) {
             ui.readyBtn.classList.remove("hidden");
           }
         } else if (snap.status === "playing") {
-          ui.instructionText.textContent = t("playingPrompt");
+          ui.instructionText.textContent = `${t("playingPrompt")} (${mode})`;
           ui.tapBtn.classList.remove("hidden");
         } else if (snap.status === "ended") {
           ui.instructionText.textContent = t("endedPrompt");
@@ -368,8 +376,43 @@
         });
         const res = await fetch(`/api/room-state?${params.toString()}`);
         if (!res.ok) return;
-        state.snapshot = await res.json();
+        const snap = await res.json();
+        updateSnapshot(snap);
+      }
+
+      function updateSnapshot(snap) {
+        state.snapshot = snap;
+        state.lastVersion = snap.version || state.lastVersion;
+        state.snapshotReceivedAtMs = Date.now();
         renderSnapshot();
+      }
+
+      function delay(ms) {
+        return new Promise((resolve) => setTimeout(resolve, ms));
+      }
+
+      async function waitStateLoop() {
+        if (state.waitLoopStarted) return;
+        state.waitLoopStarted = true;
+        while (state.roomCode && state.playerToken) {
+          try {
+            const params = new URLSearchParams({
+              room_code: state.roomCode,
+              token: state.playerToken,
+              after_version: String(state.lastVersion || 0)
+            });
+            const res = await fetch(`/api/wait-state?${params.toString()}`);
+            if (!res.ok) {
+              await delay(600);
+              continue;
+            }
+            const snap = await res.json();
+            updateSnapshot(snap);
+          } catch (_error) {
+            await delay(800);
+          }
+        }
+        state.waitLoopStarted = false;
       }
 
       ui.permissionBtn.addEventListener("click", requestPermission);
@@ -382,7 +425,7 @@
       applyI18n();
       ui.permissionStatus.textContent = t("permissionWaiting");
       setInterval(() => {
-        pollStateOnce().catch(() => {});
+        renderSnapshot();
       }, 350);
     </script>
   </body>
